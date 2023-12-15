@@ -1,0 +1,121 @@
+---
+title: "ATP_WebScraping_Clean"
+author: "Emily Wilkinson, Page Freeman, Tianji Lukins"
+date: "October 3, 2023"
+output: html_document
+---
+
+Libraries
+```{r}
+library(tidyverse)
+library(rvest)
+library(jsonlite)
+library(polite)
+```
+
+For Loop to gather the data into a list 
+```{r}
+#Vector for the different pages that need to be scraped
+Pages <- c('All', 'clay', 'grass', 'hard', 'vslefthanders', 'vsrighthanders', 'grandslam', '1000', 'after1stsetwin', 'after1stsetloss')
+
+#An empty list to put the data into 
+atp_data <- list()
+
+#for loop to scrape all of the data necessary from the website
+for (i in Pages){ 
+  Sys.sleep(runif(1, 1, 3))
+  statsurl <- paste0("https://www.atptour.com/en/content/ajax/fedex-performance-full-table/ytd/",i,"/All")
+  stats_page <- read_html(statsurl)
+  stats_table <- stats_page %>% html_table() %>% .[[1]]
+  stats_table <- stats_table[,-c(2,3,6)]
+  colnames(stats_table) <- c("Ranking", "Player", "Percentage", "Win_Loss")
+  atp_data[[i]] <- stats_table
+  
+  print(paste("page", i, "completed"))
+}
+
+atp_data
+```
+
+Inner Joining all of the tables together 
+```{r}
+#Joining court type to overall
+final_data <- atp_data$All %>%
+  inner_join(atp_data$clay, by = ('Player' = 'Player'))
+final_data <- final_data[, c(1:4, 6)]
+final_data <- final_data %>% 
+  inner_join(atp_data$grass, by = ('Player' = 'Player'))
+final_data <- final_data%>%
+  inner_join(atp_data$hard, by = ('Player' = 'Player'))
+final_data <- final_data[,c(1:5, 7, 10)]
+colnames(final_data) <- c("Ranking", "Player", "Overall_Percentage", "Overall_Win_Loss", "Clay_Percentage", "Grass_Percentage",
+                          "Hard_Percentage")
+
+#Joining vs left and right handed players
+final_data <- final_data %>%
+  inner_join(atp_data$vslefthanders, by = ('Player' = 'Player'))
+final_data <- final_data %>%
+  inner_join(atp_data$vsrighthanders, by = ('Player' = 'Player'))
+final_data <- final_data[,c(1:7, 9, 12)]
+colnames(final_data) <- c("Ranking", "Player", "Overall_Percentage", "Overall_Win_Loss", "Clay_Percentage", "Grass_Percentage", 
+                          "Hard_Percentage", "L_Percentage", "R_Percentage")
+
+#Joining Grandslam and Masters 1000
+final_data <- final_data %>%
+  inner_join(atp_data$grandslam, by = ('Player' = 'Player'))
+final_data <- final_data %>%
+  inner_join(atp_data$`1000`, by = ('Player' = 'Player'))
+final_data <- final_data[,c(1:9, 11, 14)]
+colnames(final_data) <- c("Ranking", "Player", "Overall_Percentage", "Overall_Win_Loss", "Clay_Percentage", "Grass_Percentage", 
+                          "Hard_Percentage", "L_Percentage", "R_Percentage", "GS_Percentage", "Masters_Percentage")
+
+#Joining after winning or losing the first set 
+final_data <- final_data %>%
+  inner_join(atp_data$after1stsetloss, by = ('Player' = 'Player'))
+final_data <- final_data %>%
+  inner_join(atp_data$after1stsetwin, by = ('Player' = 'Player'))
+final_data <- final_data[,c(1:11, 13, 16)]
+colnames(final_data) <- c("Ranking", "Player", "Overall_Percentage", "Overall_Win_Loss", "Clay_Percentage", "Grass_Percentage",
+                          "Hard_Percentage", "L_Percentage", "R_Percentage", "GS_Percentage", "Masters_Percentage", "Loss_Percentage",
+                          "Win_Percentage")
+
+final_data
+```
+
+Logistic Regressions
+```{r}
+Mod1 <- lm(Overall_Percentage ~  Clay_Percentage + Grass_Percentage + Hard_Percentage + L_Percentage + R_Percentage + GS_Percentage + 
+            Masters_Percentage + Loss_Percentage + Win_Percentage, 
+            final_data)
+summary(Mod1)
+Mod1
+
+Mod2 <- lm(Overall_Percentage ~ R_Percentage + L_Percentage + Win_Percentage + Loss_Percentage, final_data)
+summary(Mod2)
+Mod2
+```
+
+Player Clustering by Court Type and Win Percentage
+```{r}
+#Split win-loss into 2 numerics
+final_data[c("Overall_Wins" , "Overall_Losses")] <- str_split_fixed(final_data$Overall_Win_Loss, '-', 2)
+final_data <- final_data[,-4]
+final_data$Overall_Wins = as.numeric(final_data$Overall_Wins)
+final_data$Overall_Losses = as.numeric(final_data$Overall_Losses)
+
+Best_Court <- final_data %>% 
+  group_by(Player) %>%
+  select(Clay_Percentage, Grass_Percentage, Hard_Percentage) %>%
+  summarise(Best_Court = which.max(c(Clay_Percentage, Grass_Percentage, Hard_Percentage)))
+
+final_data$Best_Court <- Best_Court$Best_Court
+
+ggplot(final_data, aes(x=Overall_Losses, y = Overall_Wins, color = factor(Best_Court)))+
+  geom_point()+
+    labs(x = "Overall Loses",  
+    y = "Overall Wins",
+    color = "Court Type") +
+  scale_color_manual(values =  c("1" = "blue", "2" = "green", "3" = "red"), labels=c("1" = "Clay", "2" = "Grass", "3" = "Hard"))
+
+```
+
